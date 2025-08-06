@@ -1,1 +1,1 @@
-selenium==4.34.2
+PyMuPDF==1.25.5
