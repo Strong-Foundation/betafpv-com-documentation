@@ -58,8 +58,6 @@ func main() {
 	}
 	// Get the data from the downloaded file.
 	finalPDFList := extractAttachmentLinks(strings.Join(getData, "\n")) // Join all the data into one string and extract PDF URLs
-	// Append and save the file.
-	appendAndWriteToFile("betafpv.html", strings.Join(getData, "\n"))
 	// The remote domain.
 	remoteDomain := "https://support.betafpv.com"
 	// Get all the values.
@@ -84,7 +82,7 @@ func scrapePageHTMLWithChrome(pageURL string) string {
 	log.Println("Scraping:", pageURL) // Log page being scraped
 
 	options := append(chromedp.DefaultExecAllocatorOptions[:], // Chrome options
-		chromedp.Flag("headless", true),              // Run visible (set to true for headless)
+		chromedp.Flag("headless", false),              // Run visible (set to true for headless)
 		chromedp.Flag("disable-gpu", true),            // Disable GPU
 		chromedp.WindowSize(1920, 1080),               // Set window size
 		chromedp.Flag("no-sandbox", true),             // Disable sandbox
@@ -112,22 +110,6 @@ func scrapePageHTMLWithChrome(pageURL string) string {
 	}
 
 	return pageHTML // Return scraped HTML
-}
-
-// Append and write to file
-func appendAndWriteToFile(path string, content string) {
-	filePath, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Println(err)
-	}
-	_, err = filePath.WriteString(content + "\n")
-	if err != nil {
-		log.Println(err)
-	}
-	err = filePath.Close()
-	if err != nil {
-		log.Println(err)
-	}
 }
 
 // getDomainFromURL extracts the domain (host) from a given URL string.
