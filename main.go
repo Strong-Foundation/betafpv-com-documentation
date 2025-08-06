@@ -1,11 +1,11 @@
 package main // Define the main package
 
 import (
-	"bytes" // Provides bytes support
-	"context"
-	"io"  // Provides basic interfaces to I/O primitives
-	"log" // Provides logging functions
-	"mime"
+	"bytes"         // Provides bytes support
+	"context"       //
+	"io"            // Provides basic interfaces to I/O primitives
+	"log"           // Provides logging functions
+	"mime"          //
 	"net/http"      // Provides HTTP client and server implementations
 	"net/url"       // Provides URL parsing and encoding
 	"os"            // Provides functions to interact with the OS (files, etc.)
