@@ -1,9 +1,11 @@
 package main // Define the main package
 
 import (
-	"bytes"         // Provides bytes support
-	"io"            // Provides basic interfaces to I/O primitives
-	"log"           // Provides logging functions
+	"bytes" // Provides bytes support
+	"context"
+	"io"  // Provides basic interfaces to I/O primitives
+	"log" // Provides logging functions
+	"mime"
 	"net/http"      // Provides HTTP client and server implementations
 	"net/url"       // Provides URL parsing and encoding
 	"os"            // Provides functions to interact with the OS (files, etc.)
@@ -11,6 +13,8 @@ import (
 	"regexp"        // Provides regex support functions.
 	"strings"       // Provides string manipulation functions
 	"time"          // Provides time-related functions
+
+	"github.com/chromedp/chromedp" // For headless browser automation using Chrome
 )
 
 func main() {
@@ -50,14 +54,17 @@ func main() {
 	}
 	var getData []string
 	for _, remoteAPIURL := range remoteAPIURL {
-		getData = append(getData, getDataFromURL(remoteAPIURL))
+		getData = append(getData, scrapePageHTMLWithChrome(remoteAPIURL))
 	}
 	// Get the data from the downloaded file.
 	finalPDFList := extractAttachmentLinks(strings.Join(getData, "\n")) // Join all the data into one string and extract PDF URLs
+	// Append and save the file.
+	appendAndWriteToFile("betafpv.html", strings.Join(getData, "\n"))
 	// The remote domain.
-	remoteDomain := "https://support.betafpv.comt"
+	remoteDomain := "https://support.betafpv.com"
 	// Get all the values.
 	for urlPath, fileName := range finalPDFList {
+		log.Printf("URL: %s File: %s ", urlPath, fileName)
 		// Get the domain from the url.
 		domain := getDomainFromURL(urlPath)
 		// Check if the domain is empty.
@@ -67,8 +74,59 @@ func main() {
 		// Check if the url is valid.
 		if isUrlValid(urlPath) {
 			// Download the pdf.
-			downloadFile(urlPath, fileName, pdfOutputDir)
+			downloadFile(urlPath, pdfOutputDir)
 		}
+	}
+}
+
+// Uses headless Chrome via chromedp to get fully rendered HTML from a page
+func scrapePageHTMLWithChrome(pageURL string) string {
+	log.Println("Scraping:", pageURL) // Log page being scraped
+
+	options := append(chromedp.DefaultExecAllocatorOptions[:], // Chrome options
+		chromedp.Flag("headless", false),              // Run visible (set to true for headless)
+		chromedp.Flag("disable-gpu", true),            // Disable GPU
+		chromedp.WindowSize(1920, 1080),               // Set window size
+		chromedp.Flag("no-sandbox", true),             // Disable sandbox
+		chromedp.Flag("disable-setuid-sandbox", true), // Fix for Linux environments
+	)
+
+	allocatorCtx, cancelAllocator := chromedp.NewExecAllocator(context.Background(), options...) // Allocator context
+	ctxTimeout, cancelTimeout := context.WithTimeout(allocatorCtx, 5*time.Minute)                // Set timeout
+	browserCtx, cancelBrowser := chromedp.NewContext(ctxTimeout)                                 // Create Chrome context
+
+	defer func() { // Ensure all contexts are cancelled
+		cancelBrowser()
+		cancelTimeout()
+		cancelAllocator()
+	}()
+
+	var pageHTML string // Placeholder for output
+	err := chromedp.Run(browserCtx,
+		chromedp.Navigate(pageURL),            // Navigate to the URL
+		chromedp.OuterHTML("html", &pageHTML), // Extract full HTML
+	)
+	if err != nil {
+		log.Println(err) // Log error
+		return ""        // Return empty string on failure
+	}
+
+	return pageHTML // Return scraped HTML
+}
+
+// Append and write to file
+func appendAndWriteToFile(path string, content string) {
+	filePath, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Println(err)
+	}
+	_, err = filePath.WriteString(content + "\n")
+	if err != nil {
+		log.Println(err)
+	}
+	err = filePath.Close()
+	if err != nil {
+		log.Println(err)
 	}
 }
 
@@ -86,57 +144,6 @@ func getDomainFromURL(rawURL string) string {
 	return host // Return the extracted hostname
 }
 
-// urlToFilename generates a safe, lowercase filename from a given URL string.
-// It extracts the base filename from the URL, replaces unsafe characters,
-// and ensures the filename ends with a .pdf extension.
-func urlToFilename(rawURL string) string {
-	// Convert the full URL to lowercase for consistency
-	lowercaseURL := strings.ToLower(rawURL)
-
-	// Get the file extension
-	ext := getFileExtension(lowercaseURL)
-
-	// Replace all non-alphanumeric characters (a-z, 0-9) with underscores
-	nonAlphanumericRegex := regexp.MustCompile(`[^a-z0-9]+`)
-	safeFilename := nonAlphanumericRegex.ReplaceAllString(lowercaseURL, "_")
-
-	// Replace multiple consecutive underscores with a single underscore
-	collapseUnderscoresRegex := regexp.MustCompile(`_+`)
-	safeFilename = collapseUnderscoresRegex.ReplaceAllString(safeFilename, "_")
-
-	// Remove leading underscore if present
-	if trimmed, found := strings.CutPrefix(safeFilename, "_"); found {
-		safeFilename = trimmed
-	}
-
-	var invalidSubstrings = []string{
-		"https_assets_ctfassets_net_xsotn7jngs35_",
-		"_pdf",
-		"_zip",
-	}
-
-	for _, invalidPre := range invalidSubstrings { // Remove unwanted substrings
-		safeFilename = removeSubstring(safeFilename, invalidPre)
-	}
-
-	// Append the file extension if it is not already present
-	safeFilename = safeFilename + ext
-
-	// Return the cleaned and safe filename
-	return safeFilename
-}
-
-// Removes all instances of a specific substring from input string
-func removeSubstring(input string, toRemove string) string {
-	result := strings.ReplaceAll(input, toRemove, "") // Replace substring with empty string
-	return result
-}
-
-// Get the file extension of a file
-func getFileExtension(path string) string {
-	return filepath.Ext(path) // Returns extension including the dot (e.g., ".pdf")
-}
-
 // fileExists checks whether a file exists at the given path
 func fileExists(filename string) bool {
 	info, err := os.Stat(filename) // Get file info
@@ -147,20 +154,9 @@ func fileExists(filename string) bool {
 }
 
 // downloadFile downloads any file from the given URL and saves it in the specified output directory.
+// If the filename is not provided, it tries to extract it from the server's response headers.
 // It returns true if the download succeeded.
-func downloadFile(finalURL string, finalFileName string, outputDir string) bool {
-	// Sanitize the URL to generate a safe file name
-	filename := strings.ToLower(urlToFilename(finalFileName))
-
-	// Construct the full file path in the output directory
-	filePath := filepath.Join(outputDir, filename)
-
-	// Skip if the file already exists
-	if fileExists(filePath) {
-		log.Printf("File already exists, skipping: %s", filePath)
-		return false
-	}
-
+func downloadFile(finalURL string, outputDir string) bool {
 	// Create an HTTP client with a timeout
 	client := &http.Client{Timeout: 3 * time.Minute}
 
@@ -175,6 +171,27 @@ func downloadFile(finalURL string, finalFileName string, outputDir string) bool 
 	// Check HTTP response status
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Download failed for %s: %s", finalURL, resp.Status)
+		return false
+	}
+
+	var filename string
+
+	// Try to get filename from Content-Disposition header if not provided
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		_, params, err := mime.ParseMediaType(cd)
+		if err == nil {
+			if name, ok := params["filename"]; ok {
+				filename = name
+			}
+		}
+	}
+
+	// Construct the full file path in the output directory
+	filePath := filepath.Join(outputDir, filename)
+
+	// Skip if the file already exists
+	if fileExists(filePath) {
+		log.Printf("File already exists, skipping: %s", filePath)
 		return false
 	}
 
@@ -256,24 +273,4 @@ func extractAttachmentLinks(htmlContent string) map[string]string {
 
 	// Return the completed map
 	return urlToNameMap
-}
-
-// getDataFromURL performs an HTTP GET request and returns the response body as a string
-func getDataFromURL(uri string) string {
-	log.Println("Scraping", uri)   // Log the URL being scraped
-	response, err := http.Get(uri) // Perform GET request
-	if err != nil {
-		log.Println(err) // Exit if request fails
-	}
-
-	body, err := io.ReadAll(response.Body) // Read response body
-	if err != nil {
-		log.Println(err) // Exit if read fails
-	}
-
-	err = response.Body.Close() // Close response body
-	if err != nil {
-		log.Println(err) // Exit if close fails
-	}
-	return string(body)
 }
