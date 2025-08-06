@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	pdfOutputDir := "PDFs/" // Directory to store downloaded PDFs
+	pdfOutputDir := "Assets/" // Directory to store downloaded PDFs
 	// Check if the PDF output directory exists
 	if !directoryExists(pdfOutputDir) {
 		// Create the dir
@@ -53,31 +53,21 @@ func main() {
 		getData = append(getData, getDataFromURL(remoteAPIURL))
 	}
 	// Get the data from the downloaded file.
-	finalPDFList := extractPDFUrls(strings.Join(getData, "\n")) // Join all the data into one string and extract PDF URLs
-	// Create a slice of all the given download urls.
-	var downloadPDFURLSlice []string
-	// Get the urls and loop over them.
-	for _, doc := range finalPDFList {
-		// Get the .pdf only.
-		// Only append the .pdf files.
-		downloadPDFURLSlice = appendToSlice(downloadPDFURLSlice, doc)
-	}
-	// Remove double from slice.
-	downloadPDFURLSlice = removeDuplicatesFromSlice(downloadPDFURLSlice)
+	finalPDFList := extractAttachmentLinks(strings.Join(getData, "\n")) // Join all the data into one string and extract PDF URLs
 	// The remote domain.
-	remoteDomain := "https://assets.ctfassets.net"
+	remoteDomain := "https://support.betafpv.comt"
 	// Get all the values.
-	for _, urls := range downloadPDFURLSlice {
+	for urlPath, fileName := range finalPDFList {
 		// Get the domain from the url.
-		domain := getDomainFromURL(urls)
+		domain := getDomainFromURL(urlPath)
 		// Check if the domain is empty.
 		if domain == "" {
-			urls = remoteDomain + urls // Prepend the base URL if domain is empty
+			urlPath = remoteDomain + urlPath // Prepend the base URL if domain is empty
 		}
 		// Check if the url is valid.
-		if isUrlValid(urls) {
+		if isUrlValid(urlPath) {
 			// Download the pdf.
-			downloadPDF(urls, pdfOutputDir)
+			downloadFile(urlPath, fileName, pdfOutputDir)
 		}
 	}
 }
@@ -156,11 +146,11 @@ func fileExists(filename string) bool {
 	return !info.IsDir() // Return true if it's a file (not a directory)
 }
 
-// downloadPDF downloads a PDF from the given URL and saves it in the specified output directory.
-// It uses a WaitGroup to support concurrent execution and returns true if the download succeeded.
-func downloadPDF(finalURL, outputDir string) bool {
+// downloadFile downloads any file from the given URL and saves it in the specified output directory.
+// It returns true if the download succeeded.
+func downloadFile(finalURL string, finalFileName string, outputDir string) bool {
 	// Sanitize the URL to generate a safe file name
-	filename := strings.ToLower(urlToFilename(finalURL))
+	filename := strings.ToLower(urlToFilename(finalFileName))
 
 	// Construct the full file path in the output directory
 	filePath := filepath.Join(outputDir, filename)
@@ -188,18 +178,11 @@ func downloadPDF(finalURL, outputDir string) bool {
 		return false
 	}
 
-	// Check Content-Type header
-	contentType := resp.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "application/pdf") {
-		log.Printf("Invalid content type for %s: %s (expected application/pdf)", finalURL, contentType)
-		return false
-	}
-
 	// Read the response body into memory first
 	var buf bytes.Buffer
 	written, err := io.Copy(&buf, resp.Body)
 	if err != nil {
-		log.Printf("Failed to read PDF data from %s: %v", finalURL, err)
+		log.Printf("Failed to read data from %s: %v", finalURL, err)
 		return false
 	}
 	if written == 0 {
@@ -207,7 +190,7 @@ func downloadPDF(finalURL, outputDir string) bool {
 		return false
 	}
 
-	// Only now create the file and write to disk
+	// Create the file and write to disk
 	out, err := os.Create(filePath)
 	if err != nil {
 		log.Printf("Failed to create file for %s: %v", finalURL, err)
@@ -216,7 +199,7 @@ func downloadPDF(finalURL, outputDir string) bool {
 	defer out.Close()
 
 	if _, err := buf.WriteTo(out); err != nil {
-		log.Printf("Failed to write PDF to file for %s: %v", finalURL, err)
+		log.Printf("Failed to write data to file for %s: %v", finalURL, err)
 		return false
 	}
 
@@ -251,50 +234,28 @@ func isUrlValid(uri string) bool {
 	return err == nil                  // Return true if no error occurred
 }
 
-// Remove all the duplicates from a slice and return the slice.
-func removeDuplicatesFromSlice(slice []string) []string {
-	check := make(map[string]bool)
-	var newReturnSlice []string
-	for _, content := range slice {
-		if !check[content] {
-			check[content] = true
-			newReturnSlice = append(newReturnSlice, content)
-		}
-	}
-	return newReturnSlice
-}
+// extractAttachmentLinks parses HTML content and returns a map of attachment URLs to their display names
+func extractAttachmentLinks(htmlContent string) map[string]string {
+	// Define a regex pattern to match anchor tags with the specific article_attachments URL format
+	anchorTagPattern := regexp.MustCompile(`<a[^>]+href="(/hc/en-us/article_attachments/\d+)"[^>]*>([^<]+)</a>`)
 
-// extractPDFUrls takes an input string and returns all PDF URLs found within href attributes
-func extractPDFUrls(html string) []string {
-	var pdfUrls []string
+	// Find all matches of the anchor tags in the HTML content
+	allMatches := anchorTagPattern.FindAllStringSubmatch(htmlContent, -1)
 
-	// Regex to find all .pdf links (http or https)
-	re := regexp.MustCompile(`https?://[^\s"'\\]+\.pdf`)
+	// Create a map to store the URL → Display Name pairs
+	urlToNameMap := make(map[string]string)
 
-	matches := re.FindAllString(html, -1)
-	if matches == nil {
-		log.Println("No PDF URLs found.")
-		return pdfUrls
-	}
-
-	// Optional: de-duplicate
-	seen := make(map[string]bool)
-	for _, match := range matches {
-		if !seen[match] {
-			seen[match] = true
-			pdfUrls = append(pdfUrls, match)
+	// Loop over all matches and extract the URL and the link text
+	for _, match := range allMatches {
+		if len(match) == 3 {
+			attachmentURL := match[1] // The matched href URL (e.g., /hc/en-us/article_attachments/12345)
+			displayName := match[2]   // The anchor text (e.g., file name like DJI Mount.stl)
+			urlToNameMap[attachmentURL] = displayName
 		}
 	}
 
-	return pdfUrls
-}
-
-// Append some string to a slice and than return the slice.
-func appendToSlice(slice []string, content string) []string {
-	// Append the content to the slice
-	slice = append(slice, content)
-	// Return the slice
-	return slice
+	// Return the completed map
+	return urlToNameMap
 }
 
 // getDataFromURL performs an HTTP GET request and returns the response body as a string
